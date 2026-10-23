@@ -1,0 +1,9 @@
+# Chrome extension build artifacts
+node_modules/
+dist/
+build/
+*.crx
+# Source map recovery intermediates (keep originals in repo)
+*.map.tmp
+# Local Chrome profile (never commit)
+User\ Data/

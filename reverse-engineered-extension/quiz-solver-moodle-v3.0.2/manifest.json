@@ -1,0 +1,41 @@
+{
+   "action": {
+      "default_icon": "assets/logo-colour-48x48.png",
+      "default_popup": "./popup/index.html"
+   },
+   "browser_specific_settings": {
+      "gecko": {
+         "data_collection_permissions": {
+            "required": [ "authenticationInfo", "websiteContent" ]
+         },
+         "id": "quiz-solver@quizsolverformoodle.com",
+         "strict_min_version": "128.0"
+      }
+   },
+   "content_scripts": [ {
+      "js": [ "MoodleBridge.js" ],
+      "matches": [ "*://*/**/mod/quiz/attempt.php*", "*://*/mod/quiz/attempt.php*" ],
+      "run_at": "document_start",
+      "world": "MAIN"
+   }, {
+      "js": [ "QuizSolver.js" ],
+      "matches": [ "*://*/**/mod/quiz/attempt.php*", "*://*/mod/quiz/attempt.php*" ],
+      "run_at": "document_end"
+   } ],
+   "description": "Ace every quiz with AI-powered answers for Moodle.",
+   "host_permissions": [ "*://*/*" ],
+   "icons": {
+      "128": "assets/logo-colour-128x128.png",
+      "16": "assets/logo-colour-16x16.png",
+      "32": "assets/logo-colour-32x32.png",
+      "48": "assets/logo-colour-48x48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsPnK0s1PRP8fTpIYBFHtRHuCE0QQkYNorAdOrESWGJ+lOqR1BL8Em+HDkMC3TqU+SHS2oDNQrcKJrepWkd5upu/SFx2vHZGSMBFx0U77HAq6/0+7bnhOOXCkN6S3/y3iMsGADYKjLQko7EZKO2rocBI0QbW3IQDn8XXgVIC0IphrifJ5Y7TwRwQRo3Fs/9cjkSIdAN+KY8Y7hi9pCFfJPSWdX73p3hMuxP9rwbdhxSvt+3+5H73UPrSrdl+gnXNcba8u0WeVZ/8SVTBABUIR3LOBg57huAHafjrcTO6XgZwj7jqx7ea8FDtwg8bPRM2jDznvTqSxXRo4eyboJgCr6QIDAQAB",
+   "manifest_version": 3,
+   "minimum_chrome_version": "111",
+   "name": "Quiz Solver for Moodle",
+   "permissions": [ "storage" ],
+   "short_name": "Quiz Solver",
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "3.0.2"
+}

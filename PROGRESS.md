@@ -5,6 +5,6 @@
 - [x] Copy extension to repo under reverse-engineered-extension/
 - [x] Create reverse-engineering-chrome-extensions skill
 - [x] Init git repo + README + reuse patterns from reels-guard/vid-gain
-- [ ] Create GitHub repo and push (next step)
-- [ ] Recover logic from .map files / minified JS
-- [ ] Build replacement extension
+- [x] Create GitHub repo and push
+- [x] Recover logic from .map files / minified JS (source maps lack TS source; analyzed bundled JS)
+- [x] Build replacement extension

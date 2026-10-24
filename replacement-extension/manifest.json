@@ -1,0 +1,56 @@
+{
+  "name": "Moodle Quiz Solver",
+  "short_name": "Quiz Solver",
+  "version": "1.0.0",
+  "manifest_version": 3,
+  "description": "AI-powered quiz solver for Moodle. Reverse-engineered replacement for Quiz Solver for Moodle v3.0.2.",
+  "minimum_chrome_version": "111",
+  "icons": {
+    "16": "assets/logo-colour-16x16.png",
+    "32": "assets/logo-colour-32x32.png",
+    "48": "assets/logo-colour-48x48.png",
+    "128": "assets/logo-colour-128x128.png"
+  },
+  "action": {
+    "default_icon": "assets/logo-colour-48x48.png",
+    "default_popup": "popup/popup.html"
+  },
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*/mod/quiz/attempt.php*"
+  ],
+  "content_scripts": [
+    {
+      "js": ["content/bridge.js"],
+      "matches": ["*://*/**/mod/quiz/attempt.php*", "*://*/mod/quiz/attempt.php*"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "js": ["content/solver.js"],
+      "matches": ["*://*/**/mod/quiz/attempt.php*", "*://*/mod/quiz/attempt.php*"],
+      "run_at": "document_end",
+      "world": "MAIN"
+    }
+  ],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "options_page": "popup/popup.html",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "moodle-quiz-solver@moodle-solver.local",
+      "strict_min_version": "128.0"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+# Environment
+.env
+*/.env
+
+# Build output (keep committed)
+!content/
+!background/
+!popup/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db

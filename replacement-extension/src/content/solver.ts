@@ -6,7 +6,7 @@
  */
 
 // --- Configuration ---
-const BACKEND_URL = 'https://quizsolverformoodle.com';
+const BACKEND_URL = 'http://localhost:3000';
 const RESPONSE_TIMEOUT_MS = 30000;
 const ACTION_TIMEOUT_MS = 3000;
 const READY_TIMEOUT_MS = 15000;

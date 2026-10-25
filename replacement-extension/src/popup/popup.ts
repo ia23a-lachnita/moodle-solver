@@ -3,7 +3,7 @@
  * Manages the configuration UI for the Moodle Quiz Solver extension.
  */
 
-const BACKEND_URL = 'https://quizsolverformoodle.com';
+const BACKEND_URL = 'http://localhost:3000';
 
 class PopupController {
   private apiKeyInput: HTMLInputElement;

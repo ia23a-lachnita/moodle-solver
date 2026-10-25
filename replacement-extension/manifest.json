@@ -21,7 +21,8 @@
     "scripting"
   ],
   "host_permissions": [
-    "*://*/mod/quiz/attempt.php*"
+    "*://*/mod/quiz/attempt.php*",
+    "http://localhost:3000/*"
   ],
   "content_scripts": [
     {

@@ -3,7 +3,7 @@
  * Handles API proxying and storage management
  */
 
-const BACKEND_URL = 'https://quizsolverformoodle.com';
+const BACKEND_URL = 'http://localhost:3000';
 
 // Handle messages from content scripts or popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

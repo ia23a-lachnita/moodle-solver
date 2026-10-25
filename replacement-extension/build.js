@@ -107,10 +107,14 @@ async function build() {
   }
 
   if (isWatch) {
-    const ctx = await esbuild.context({
-      ...builds[0],
-      watch: true,
-    });
+    const contexts = [];
+    for (const buildConfig of builds) {
+      const { watch, ...config } = buildConfig;
+      void watch;
+      const ctx = await esbuild.context({ ...config, minify: false });
+      await ctx.watch();
+      contexts.push(ctx);
+    }
     console.log('Watching for changes...');
   } else {
     for (const buildConfig of builds) {

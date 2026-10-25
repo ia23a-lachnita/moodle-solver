@@ -8,3 +8,8 @@
 - [x] Create GitHub repo and push
 - [x] Recover logic from .map files / minified JS (source maps lack TS source; analyzed bundled JS)
 - [x] Build replacement extension
+- [x] Add essay editor support to bridge.ts (TinyMCE + Atto + plain textarea)
+- [x] Connect essay commands (essay.ready/write/restore) between solver.ts and bridge.ts
+- [x] Verify all 16 question types are handled in extraction chain
+- [x] Create README.md for replacement extension
+- [x] Verify builds + syntax checks pass

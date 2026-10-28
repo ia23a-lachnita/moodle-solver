@@ -1,9 +1,9 @@
 /**
  * Background Service Worker
- * Handles API proxying and storage management
+ * BYOK - Direct AI provider calls (OpenAI, Anthropic, OpenRouter, Ollama, Custom)
  */
 
-const BACKEND_URL = 'http://localhost:3000';
+import { ProviderConfig, AnswerRequest, AnswerResponse, ExtensionConfig, STORAGE_KEYS, AIProvider, PROVIDER_PRESETS } from '../shared/types.js';
 
 // Handle messages from content scripts or popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -11,32 +11,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   switch (type) {
     case 'CHECK_API_KEY':
-      checkApiKey(payload.apiKey)
-        .then(result => sendResponse({ success: true, result }))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-      return true; // Will respond asynchronously
-
-    case 'GET_MODELS':
-      getModels(payload.apiKey, payload.signal)
+      checkApiKey(payload.config)
         .then(result => sendResponse({ success: true, result }))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
 
-    case 'GET_CAPABILITIES':
-      getCapabilities(payload.apiKey)
+    case 'GET_MODELS':
+      getModels(payload.config)
         .then(result => sendResponse({ success: true, result }))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
 
     case 'GET_ANSWER':
-      getAnswer(payload, payload.signal)
+      getAnswer(payload.request, payload.config)
         .then(result => sendResponse({ success: true, result }))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-      return true;
-
-    case 'DECREMENT_CREDITS':
-      decrementCredits()
-        .then(() => sendResponse({ success: true }))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
 
@@ -58,101 +46,209 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function checkApiKey(apiKey) {
-  const response = await fetch(`${BACKEND_URL}/api/v2/capabilities`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  if (response.status === 401) return { valid: false, error: 'Invalid API key' };
-  if (!response.ok) return { valid: false, error: `Server error: ${response.status}` };
-  const data = await response.json();
-  return { valid: true, caps: data };
-}
+function getProviderHeaders(config: ProviderConfig): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
 
-async function getModels(apiKey) {
-  const response = await fetch(`${BACKEND_URL}/api/v2/models`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Failed to fetch models: ${response.status} - ${err}`);
-  }
-  return await response.json();
-}
-
-async function getCapabilities(apiKey) {
-  const response = await fetch(`${BACKEND_URL}/api/v2/capabilities`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Failed to fetch capabilities: ${response.status} - ${err}`);
-  }
-  return await response.json();
-}
-
-async function getAnswer(payload) {
-  const { apiKey, model, reasoning, context, question } = payload;
-
-  const response = await fetch(`${BACKEND_URL}/api/v2/answer`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      schema_version: '2.0',
-      request_id: crypto.randomUUID(),
-      snapshot_id: `s${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
-      model,
-      reasoning,
-      context: context || '',
-      question,
-    }),
-  });
-
-  if (!response.ok) {
-    let errorData;
-    try {
-      errorData = await response.json();
-    } catch {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  if (config.apiKey) {
+    if (config.provider === 'anthropic') {
+      headers['x-api-key'] = config.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else {
+      headers['Authorization'] = `Bearer ${config.apiKey}`;
     }
-    if (response.status === 401) throw new Error('Invalid API key');
-    if (response.status === 402) throw new Error('No credits remaining');
-    if (response.status === 429) throw new Error('Too many requests. Please wait.');
-    if (response.status >= 500) throw new Error('Server error. Please try again later.');
-    throw new Error(errorData?.error?.message || 'Answer request failed');
+  }
+
+  // OpenRouter specific headers
+  if (config.provider === 'openrouter') {
+    headers['HTTP-Referer'] = 'chrome-extension://moodle-quiz-solver';
+    headers['X-Title'] = 'Moodle Quiz Solver';
+  }
+
+  // Custom extra headers
+  if (config.extraHeaders) {
+    Object.assign(headers, config.extraHeaders);
+  }
+
+  return headers;
+}
+
+function buildMessages(request: AnswerRequest, config: ProviderConfig): Array<{ role: string; content: string }> {
+  const systemPrompt = `You are an AI assistant that solves Moodle quiz questions. You must output a JSON object with answers for each field in the question.
+
+CRITICAL: Output ONLY valid JSON matching this schema:
+{
+  "answer": { "field_id": "value" },
+  "explanation": "brief explanation",
+  "confidence": 0.95
+}
+
+Field types and expected value formats:
+- text: string
+- numeric: { "value": "123", "unit_option_id": "optional_unit_id" }
+- single_choice: { "option_id": "option_id" }
+- multiple_choice: { "option_ids": ["id1", "id2"] }
+- ordering: { "item_ids": ["id1", "id2", ...] }
+- markers: { "points": [{ "x": 100, "y": 200 }] }
+- essay: { "value": "HTML or plain text response" }
+
+Rules:
+1. Answer ALL fields present in the question
+2. Use exact field_ids and option_ids from the question
+3. For multiple_choice, select ALL correct options
+4. For ordering, provide ALL items in correct order
+5. Confidence: 0.0-1.0
+6. No extra commentary, ONLY the JSON`;
+
+  const userPrompt = `${request.context ? `Context: ${request.context}\n\n` : ''}Question (${request.question.qtype}):\n${JSON.stringify(request.question, null, 2)}\n\nProvide answers as JSON.`;
+
+  return [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
+}
+
+async function callProvider(config: ProviderConfig, messages: Array<{ role: string; content: string }>, signal?: AbortSignal): Promise<{ content: string; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } }> {
+  const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const headers = getProviderHeaders(config);
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages,
+    temperature: config.temperature ?? 0.1,
+    max_tokens: config.maxTokens ?? 4000,
+    response_format: { type: 'json_object' },
+  };
+
+  // OpenRouter specific: reasoning
+  if (config.provider === 'openrouter' && config.reasoning) {
+    body.reasoning = { effort: config.reasoning };
+  }
+
+  // Anthropic doesn't support response_format, use tools instead
+  if (config.provider === 'anthropic') {
+    delete body.response_format;
+    body.tools = [{
+      name: 'submit_answer',
+      description: 'Submit the structured answer',
+      input_schema: {
+        type: 'object',
+        properties: {
+          answer: { type: 'object' },
+          explanation: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+        },
+        required: ['answer', 'explanation', 'confidence'],
+      },
+    }];
+    body.tool_choice = { type: 'tool', name: 'submit_answer' };
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (!response.ok) {
+    let errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+    try {
+      const err = await response.json();
+      errorMsg = err.error?.message || err.message || errorMsg;
+    } catch {}
+    throw new Error(errorMsg);
   }
 
   const data = await response.json();
 
-  // Update credits in storage
-  const current = await chrome.storage.local.get('quizSolver');
-  if (current.quizSolver?.apiKey === apiKey && typeof data.credits_remaining === 'number') {
-    await chrome.storage.local.set({
-      quizSolver: { ...current.quizSolver, credits: data.credits_remaining }
-    });
+  // Parse response based on provider
+  let content: string;
+  let usage = data.usage;
+
+  if (config.provider === 'anthropic') {
+    // Anthropic returns tool use
+    const toolUse = data.content?.find((c: any) => c.type === 'tool_use');
+    if (toolUse?.name === 'submit_answer') {
+      content = JSON.stringify(toolUse.input);
+    } else {
+      content = data.content?.[0]?.text || '{}';
+    }
+  } else {
+    // OpenAI-compatible
+    content = data.choices?.[0]?.message?.content || '{}';
   }
 
-  return data;
+  return { content, usage };
 }
 
-async function decrementCredits() {
-  const current = await chrome.storage.local.get('quizSolver');
-  if (!current.quizSolver || typeof current.quizSolver.credits !== 'number') return;
-  const newCredits = Math.max(0, current.quizSolver.credits - 1);
-  await chrome.storage.local.set({
-    quizSolver: { ...current.quizSolver, credits: newCredits }
-  });
+async function checkApiKey(config: ProviderConfig): Promise<{ valid: boolean; models?: string[] }> {
+  try {
+    const url = `${config.baseUrl.replace(/\/$/, '')}/models`;
+    const headers = getProviderHeaders(config);
+    const response = await fetch(url, { headers });
+    if (!response.ok) return { valid: false };
+    const data = await response.json();
+    const models = data.data?.map((m: any) => m.id) || data.models?.map((m: any) => m.id) || [];
+    return { valid: true, models };
+  } catch {
+    return { valid: false };
+  }
 }
 
-async function getConfig() {
-  const result = await chrome.storage.local.get('quizSolver');
-  return result.quizSolver || null;
+async function getModels(config: ProviderConfig): Promise<{ models: Array<{ id: string; name?: string; is_default?: boolean }> }> {
+  const url = `${config.baseUrl.replace(/\/$/, '')}/models`;
+  const headers = getProviderHeaders(config);
+  const response = await fetch(url, { headers });
+  if (!response.ok) throw new Error(`Failed to fetch models: ${response.status}`);
+  const data = await response.json();
+  const models = (data.data || data.models || []).map((m: any) => ({
+    id: m.id,
+    name: m.name || m.id,
+    is_default: m.id === config.model,
+  }));
+  return { models };
 }
 
-async function setConfig(config) {
-  await chrome.storage.local.set({ quizSolver: config });
+async function getAnswer(request: AnswerRequest, config: ProviderConfig): Promise<AnswerResponse> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const messages = buildMessages(request, config);
+    const { content, usage } = await callProvider(config, messages, controller.signal);
+
+    let parsed: AnswerResponse;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      throw new Error('AI returned invalid JSON. Try a different model or adjust temperature.');
+    }
+
+    // Validate required fields
+    if (!parsed.answer || typeof parsed.answer !== 'object') {
+      throw new Error('AI response missing "answer" object');
+    }
+
+    return {
+      answer: parsed.answer,
+      explanation: parsed.explanation,
+      confidence: parsed.confidence,
+      usage,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getConfig(): Promise<ExtensionConfig | null> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.CONFIG);
+  return result[STORAGE_KEYS.CONFIG] || null;
+}
+
+async function setConfig(config: ExtensionConfig): Promise<void> {
+  await chrome.storage.local.set({ [STORAGE_KEYS.CONFIG]: config });
 }
 
 // Clean up on service worker shutdown

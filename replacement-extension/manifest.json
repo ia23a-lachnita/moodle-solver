@@ -22,7 +22,7 @@
   ],
   "host_permissions": [
     "*://*/mod/quiz/attempt.php*",
-    "http://localhost:3000/*"
+    "<all_urls>"
   ],
   "content_scripts": [
     {
@@ -47,6 +47,15 @@
       "matches": ["<all_urls>"]
     }
   ],
+  "commands": {
+    "solve-current-question": {
+      "suggested_key": {
+        "default": "Alt+Shift+S",
+        "mac": "Alt+Shift+S"
+      },
+      "description": "Solve focused or hovered question"
+    }
+  },
   "options_page": "popup/popup.html",
   "browser_specific_settings": {
     "gecko": {

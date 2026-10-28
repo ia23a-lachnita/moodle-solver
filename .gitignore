@@ -7,3 +7,4 @@ build/
 *.map.tmp
 # Local Chrome profile (never commit)
 User\ Data/
+NUL

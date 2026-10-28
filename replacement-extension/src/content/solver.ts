@@ -6,8 +6,7 @@
  */
 
 // --- Configuration ---
-const BACKEND_URL = 'http://localhost:3000';
-const RESPONSE_TIMEOUT_MS = 30000;
+const RESPONSE_TIMEOUT_MS = 60000;
 const ACTION_TIMEOUT_MS = 3000;
 const READY_TIMEOUT_MS = 15000;
 const DELAY = 25;
@@ -1184,40 +1183,14 @@ async function applyAnswer(snapshot, answer, signal, edited = () => false) {
 }
 
 // --- API Communication ---
-async function responseJSON(response) {
-  try { return await response.json(); } catch { throw new AdapterError('invalid_server_response', 'The backend returned an unreadable response. No answer was applied.'); }
-}
-
-function serverError(value) {
-  // Validate error response would use AJV validators in original
-  if (value && typeof value === 'object' && 'error' in value && value.error && typeof value.error === 'object' && 'message' in value.error) {
-    throw new AdapterError((value as { error: { code?: string; message: string } }).error.code || 'api_error', (value as { error: { message: string } }).error.message);
-  }
-  throw new AdapterError('invalid_server_response', 'The backend returned an invalid error response.');
-}
-
-async function get(path, apiKey, signal) {
-  const response = await fetch(`${BACKEND_URL}/api/v2/${path}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    signal
+async function sendToBackground(type, payload) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type, payload }, (response) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else if (response?.success) resolve(response);
+      else reject(new Error(response?.error || 'Unknown error'));
+    });
   });
-  if (response.status === 404) throw new AdapterError('v2_unavailable', 'This backend does not provide the required v2 API.');
-  const value = await responseJSON(response);
-  if (!response.ok) serverError(value);
-  return value;
-}
-
-async function getModels(apiKey, signal) {
-  const value = await get('models', apiKey, signal);
-  if (!value || !Array.isArray(value.models)) throw new AdapterError('invalid_models', 'The backend model list does not match v2.');
-  return value;
-}
-
-async function getCapabilities(apiKey, signal) {
-  const value = await get('capabilities', apiKey, signal);
-  if (!value || !Array.isArray(value.schema_versions) || !Array.isArray(value.question_types))
-    throw new AdapterError('invalid_capabilities', 'The backend capabilities do not match v2.');
-  return value;
 }
 
 async function getAnswer(snapshot, config, signal) {
@@ -1228,64 +1201,28 @@ async function getAnswer(snapshot, config, signal) {
 
   try {
     throwIfAborted(signal);
-    const [capabilities, catalog] = await Promise.all([
-      getCapabilities(config.apiKey, controller.signal),
-      getModels(config.apiKey, controller.signal)
-    ]);
 
-    if (!capabilities.schema_versions.includes('2.0') || !capabilities.question_types.includes(snapshot.question.qtype))
-      throw new AdapterError('unsupported_question', 'The backend does not support this question.');
-
-    const model = catalog.models.find(m => m.id === config.model) || catalog.models.find(m => m.is_default);
-    if (!model || !model.structured_outputs ||
-      (Object.keys(snapshot.question.assets).length > 0 && !model.input_modalities?.includes('image')))
-      throw new AdapterError('model_not_supported', 'Choose a verified model supporting structured answers and this question\'s images.');
-
-    if (!model.reasoning_levels?.some(level => level.key === config.reasoning))
-      throw new AdapterError('reasoning_not_supported', 'Choose an available reasoning level for this model in the extension settings.');
-
-    const body = {
-      schema_version: '2.0',
+    const request = {
       request_id: generateUUID(),
       snapshot_id: snapshot.id,
-      model: model.id,
-      reasoning: config.reasoning,
+      model: config.provider.model,
+      reasoning: config.provider.reasoning,
       context: config.context || '',
-      question: snapshot.question
+      question: snapshot.question,
     };
 
-    if (!validateAnswerRequest(body))
-      throw new AdapterError('invalid_request', 'The question does not satisfy the v2 request contract.');
+    const result = await sendToBackground('GET_ANSWER', { request, config: config.provider });
 
-    const serialized = JSON.stringify(body);
-    if (new TextEncoder().encode(serialized).length > capabilities.limits.max_request_bytes)
-      throw new AdapterError('request_too_large', 'This question exceeds the backend request limit.');
-
-    const response = await fetch(`${BACKEND_URL}/api/v2/answer`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: serialized,
-      signal: controller.signal
-    });
-
-    const value = await responseJSON(response);
-    if (!response.ok) serverError(value);
-    if (!validateAnswerSuccess(value))
-      throw new AdapterError('invalid_answer', 'The backend answer does not satisfy the v2 contract.');
-
-    const result = value;
-    if (result.request_id !== body.request_id || result.snapshot_id !== snapshot.id || result.question_type !== snapshot.question.qtype)
-      throw new AdapterError('stale_answer', 'The response belongs to a different question.');
-
-    validateAnswerForQuestion(snapshot.question, result.answer);
-
-    // Update credits in storage
-    const storage = await chrome.storage.local.get('quizSolver');
-    if (storage.quizSolver?.apiKey === config.apiKey && typeof result.credits_remaining === 'number')
-      await chrome.storage.local.set({ quizSolver: { ...storage.quizSolver, credits: result.credits_remaining } });
+    // Update credits in storage (local tracking only)
+    if (typeof result.usage?.total_tokens === 'number') {
+      const storage = await chrome.storage.local.get('quizSolver');
+      if (storage.quizSolver?.provider?.apiKey === config.provider.apiKey) {
+        const used = storage.quizSolver.tokensUsed || 0;
+        await chrome.storage.local.set({
+          quizSolver: { ...storage.quizSolver, tokensUsed: used + result.usage.total_tokens }
+        });
+      }
+    }
 
     return result;
   } catch (error) {
@@ -1298,32 +1235,90 @@ async function getAnswer(snapshot, config, signal) {
   }
 }
 
-// --- Validation stubs (in production, these use AJV compiled validators) ---
-function validateAnswerRequest(body) {
-  if (!body.schema_version || !body.request_id || !body.snapshot_id || !body.model || !body.question)
-    return false;
-  try {
-    // UUID pattern check
-    const uuidPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-    if (!uuidPattern.test(body.request_id)) return false;
-    if (!/^[a-z][a-zA-Z0-9_-]{0,63}$/.test(body.snapshot_id)) return false;
-    if (typeof body.context === 'string' && body.context.length > 75000) return false;
-    if (typeof body.reasoning !== 'string') return false;
-    return true;
-  } catch { return false; }
-}
-
-function validateAnswerSuccess(value) {
-  if (!value || typeof value !== 'object') return false;
-  return 'answer' in value && 'request_id' in value && 'snapshot_id' in value && 'question_type' in value;
-}
-
 // --- Main Controller ---
+let hoveredQuestion: HTMLElement | null = null;
+
 function initializeV2() {
   const states = new Map();
   const cleanups = new Map();
 
-  const trackEditors = (state) => {
+  // Track hover for cascading target resolution
+  document.addEventListener('mouseover', (e) => {
+    const que = e.target instanceof Element ? e.target.closest('.que') : null;
+    if (que) hoveredQuestion = que;
+  }, true);
+
+  document.addEventListener('mouseout', (e) => {
+    const que = e.target instanceof Element ? e.target.closest('.que') : null;
+    if (que === hoveredQuestion) hoveredQuestion = null;
+  }, true);
+
+  // Global keydown listener (single instance) + command handling
+  function handleShortcut() {
+    // Cascading target resolution:
+    // 1. Hovered question
+    // 2. Focused element's question
+    // 3. Question most centered in viewport
+    let targetRoot: HTMLElement | null = null;
+    
+    if (hoveredQuestion) {
+      targetRoot = hoveredQuestion;
+    } else {
+      const active = document.activeElement;
+      if (active && active.closest('.que')) {
+        targetRoot = active.closest('.que')!;
+      } else {
+        // Fallback: question most centered in viewport
+        const questions = document.querySelectorAll('.que');
+        let best: HTMLElement | null = null;
+        let bestDist = Infinity;
+        const viewportCenter = window.innerHeight / 2;
+        for (const q of questions) {
+          const rect = q.getBoundingClientRect();
+          if (rect.height === 0) continue;
+          const center = rect.top + rect.height / 2;
+          const dist = Math.abs(center - viewportCenter);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = q as HTMLElement;
+          }
+        }
+        targetRoot = best;
+      }
+    }
+    
+    if (targetRoot) {
+      const targetState = states.get(targetRoot);
+      if (targetState) void activate(targetState);
+    }
+  }
+
+  // Keyboard shortcut (fallback for browsers without commands API)
+  document.addEventListener('keydown', (event) => {
+    if (event.altKey && event.shiftKey && (event.key === 's' || event.key === 'S')) {
+      event.preventDefault();
+      handleShortcut();
+    }
+  }, true);
+
+  // Chrome extension command (Alt+Shift+S via manifest)
+  chrome.commands?.onCommand?.addListener((command) => {
+    if (command === 'solve-current-question') handleShortcut();
+  });
+
+  // Also handle TinyMCE/Atto iframe keydown
+  function attachIframeKeydown(frame: HTMLIFrameElement) {
+    try {
+      frame.contentDocument?.addEventListener('keydown', (event) => {
+        if (event.altKey && event.shiftKey && (event.key === 's' || event.key === 'S')) {
+          event.preventDefault();
+          handleShortcut();
+        }
+      }, true);
+    } catch {}
+  }
+
+  const trackEditors = (state: any) => {
     for (const [frame, cleanup] of state.frames) {
       if (!frame.isConnected) { cleanup(); state.frames.delete(frame); }
     }
@@ -1342,12 +1337,41 @@ function initializeV2() {
         };
         events.forEach(event => doc.addEventListener(event, edit, true));
         detach = () => events.forEach(event => doc.removeEventListener(event, edit, true));
+        // Also attach shortcut to iframe
+        attachIframeKeydown(frame);
       };
       frame.addEventListener('load', attach);
       attach();
       state.frames.set(frame, () => { detach(); frame.removeEventListener('load', attach); });
     }
   };
+
+  // Non-blocking toast notification (replaces window.alert)
+  function showToast(message: string, type: 'error' | 'info' | 'success' = 'info', duration = 4000) {
+    const container = document.getElementById('mqs-toast-container') || (() => {
+      const c = document.createElement('div');
+      c.id = 'mqs-toast-container';
+      c.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+      document.body.appendChild(c);
+      return c;
+    })();
+    
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+      background:${type === 'error' ? '#dc3545' : type === 'success' ? '#28a745' : '#0d6efd'};
+      color:white;padding:12px 16px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);
+      max-width:350px;font:13px system-ui;opacity:0;transform:translateX(100px);
+      transition:opacity 0.2s,transform 0.2s;pointer-events:auto;
+    `;
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(() => { toast.style.opacity = '1'; toast.style.transform = 'translateX(0)'; });
+    
+    setTimeout(() => {
+      toast.style.opacity = '0'; toast.style.transform = 'translateX(100px)';
+      setTimeout(() => toast.remove(), 200);
+    }, duration);
+  }
 
   const excluded = (target) => {
     const element = target instanceof Element
@@ -1365,6 +1389,11 @@ function initializeV2() {
       : state.originalCursor;
     if (cursor) state.info.style.setProperty('cursor', cursor, state.originalCursorPriority);
     else state.info.style.removeProperty('cursor');
+    
+    // Add subtle visual indicators for stealth mode
+    state.info.classList.toggle('mqs-generating', state.phase === 'generating');
+    state.info.classList.toggle('mqs-pending', state.phase === 'pending');
+    state.info.classList.toggle('mqs-applied', state.phase === 'applied');
   };
 
   const isCurrent = (state) =>
@@ -1373,6 +1402,35 @@ function initializeV2() {
     state.root.querySelector('.formulation') === state.formulation &&
     questionType(state.root) === state.type &&
     (state.root.querySelector('.qtext') || (state.root.classList.contains('multianswer') ? state.root.querySelector('.formulation') : null)) === state.stem;
+
+  // Hover preview for pending answers
+  let previewTimeout: number;
+  const showPreview = (state: any) => {
+    if (state.phase !== 'pending') return;
+    const answer = state.pending?.answer;
+    if (!answer) return;
+    
+    clearTimeout(previewTimeout);
+    const existing = state.info.querySelector('.mqs-preview');
+    if (existing) existing.remove();
+    
+    const preview = document.createElement('div');
+    preview.className = 'mqs-preview';
+    preview.style.cssText = `
+      position:absolute;top:100%;left:0;right:0;margin-top:4px;padding:8px 10px;
+      background:#fff3cd;border:1px solid #ffc107;border-radius:4px;
+      font:12px system-ui;color:#856404;box-shadow:0 4px 12px rgba(0,0,0,0.15);
+      z-index:1000;max-height:200px;overflow:auto;
+    `;
+    preview.textContent = 'Pending answer: ' + JSON.stringify(answer, null, 2).slice(0, 500);
+    state.info.style.position = 'relative';
+    state.info.appendChild(preview);
+  };
+  
+  const hidePreview = (state: any) => {
+    const preview = state.info.querySelector('.mqs-preview');
+    if (preview) preview.remove();
+  };
 
   const activate = async (state) => {
     if (!isCurrent(state) || state.phase === 'applying') return;
@@ -1391,6 +1449,7 @@ function initializeV2() {
       try {
         await applyAnswer(pending.snapshot, pending.answer, controller.signal, () => state.revision !== pending.revision);
         state.phase = 'ready';
+        showToast('Answer applied', 'success');
         update(state);
       } catch (error) {
         if (state.controller === controller && isCurrent(state)) {
@@ -1399,8 +1458,8 @@ function initializeV2() {
             (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError'));
           const message = error instanceof Error ? error.message : 'The answer could not be applied.';
           update(state);
-          if (!cancelled) window.alert(message);
-          else if (state.revision !== revision) window.alert('A manual edit interrupted application. Review this question before continuing.');
+          if (!cancelled) showToast(message, 'error');
+          else if (state.revision !== revision) showToast('A manual edit interrupted application. Review this question before continuing.', 'info');
         }
       } finally {
         if (state.controller === controller) state.controller = undefined;
@@ -1417,7 +1476,7 @@ function initializeV2() {
     try {
       const config = await getStoredConfig();
       throwIfAborted(controller.signal);
-      if (!config?.apiKey) throw new AdapterError('configuration_required', 'Configure the extension with an API key first.');
+      if (!config?.provider?.apiKey) throw new AdapterError('configuration_required', 'Configure the extension with an API key first.');
 
       state.cursor = config.cursor !== false;
       update(state);
@@ -1439,6 +1498,7 @@ function initializeV2() {
         update(state);
         await applyAnswer(snapshot, result.answer, controller.signal, () => state.revision !== revision);
         state.phase = 'ready';
+        showToast('Answer applied', 'success');
         update(state);
       }
     } catch (error) {
@@ -1448,8 +1508,8 @@ function initializeV2() {
           (controller.signal.aborted || (error instanceof Error && error.name === 'AbortError'));
         const message = error instanceof Error ? error.message : 'The answer could not be applied.';
         update(state);
-        if (!cancelled) window.alert(message);
-        else if (state.revision !== revision) window.alert('A manual edit interrupted application. Review this question before continuing.');
+        if (!cancelled) showToast(message, 'error');
+        else if (state.revision !== revision) showToast('A manual edit interrupted application. Review this question before continuing.', 'info');
       }
     } finally {
       if (state.controller === controller) state.controller = undefined;
@@ -1491,11 +1551,18 @@ function initializeV2() {
       }).catch(() => {});
 
       // Event handlers
-      const click = (event) => { if (!excluded(event.target)) void activate(state); };
-      const over = (event) => { state.nativeHover = excluded(event.target); update(state); };
+      const click = (event) => { 
+        if (!excluded(event.target)) void activate(state); 
+      };
+      const over = (event) => { 
+        state.nativeHover = excluded(event.target); 
+        update(state);
+        showPreview(state);
+      };
       const out = (event) => {
         state.nativeHover = event.relatedTarget instanceof Node && info.contains(event.relatedTarget) && excluded(event.relatedTarget);
         update(state);
+        hidePreview(state);
       };
       const edit = (event) => {
         if (!event.isTrusted || !(event.target instanceof Element)) return;

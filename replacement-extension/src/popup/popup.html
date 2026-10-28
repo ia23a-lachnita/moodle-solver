@@ -10,25 +10,38 @@
     <script src="./theme.js"></script>
   </head>
   <body>
-    <div class="container-fluid p-3" style="width: 22rem">
+    <div class="container-fluid p-3" style="width: 24rem">
       <div id="popup-root">
         <div class="d-flex justify-content-between align-items-center mb-3">
           <h5 class="mb-0">Quiz Solver</h5>
-          <div id="credits-badge" class="badge bg-secondary">—</div>
+          <div id="tokens-badge" class="badge bg-secondary">—</div>
         </div>
 
         <div id="config-form" style="display: none;">
           <div class="mb-3">
+            <label for="provider" class="form-label">AI Provider</label>
+            <select id="provider" class="form-select form-select-sm"></select>
+          </div>
+          <div class="mb-3">
+            <label for="base-url" class="form-label">API Base URL</label>
+            <input type="text" id="base-url" class="form-control form-control-sm" placeholder="https://openrouter.ai/api/v1" />
+            <div class="form-text">Leave empty to use provider default</div>
+          </div>
+          <div class="mb-3">
             <label for="api-key" class="form-label">API Key</label>
-            <input type="password" id="api-key" class="form-control form-control-sm" placeholder="Enter API key" />
+            <input type="password" id="api-key" class="form-control form-control-sm" placeholder="Enter API key (optional for local models)" />
           </div>
           <div class="mb-3">
             <label for="model" class="form-label">Model</label>
-            <select id="model" class="form-select form-select-sm"></select>
+            <div class="input-group">
+              <select id="model" class="form-select form-select-sm" style="flex: 1;"></select>
+              <input type="text" id="model-manual" class="form-control form-control-sm" placeholder="Or type model ID manually (e.g. nvidia/nemotron-3-ultra:free)" style="max-width: 300px; display: none;">
+            </div>
             <div id="model-loading" class="form-text">Loading models...</div>
+            <div class="form-text">Free models (like nemotron-3-ultra:free) may not appear in the list. Enter manually if needed.</div>
           </div>
           <div class="mb-3">
-            <label for="reasoning" class="form-label">Reasoning</label>
+            <label for="reasoning" class="form-label">Reasoning (OpenRouter only)</label>
             <select id="reasoning" class="form-select form-select-sm">
               <option value="low">Low</option>
               <option value="medium">Medium</option>
@@ -36,17 +49,38 @@
             </select>
           </div>
           <div class="mb-3">
+            <label for="temperature" class="form-label">Temperature</label>
+            <input type="number" id="temperature" class="form-control form-control-sm" step="0.1" min="0" max="2" placeholder="0.1" />
+          </div>
+          <div class="mb-3">
+            <label for="max-tokens" class="form-label">Max Tokens</label>
+            <input type="number" id="max-tokens" class="form-control form-control-sm" placeholder="4000" min="100" max="128000" />
+          </div>
+          <div class="mb-3">
             <label for="context" class="form-label">Context</label>
             <textarea id="context" class="form-control form-control-sm" rows="3" placeholder="Optional context for answers"></textarea>
           </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" id="cursor" class="form-check-input" checked />
+            <label class="form-check-label" for="cursor">Show pointer cursor on questions</label>
+          </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" id="fill-on-click" class="form-check-input" checked />
+            <label class="form-check-label" for="fill-on-click">Two-step (queue on click, apply on second click)</label>
+          </div>
+          <div class="mb-3 form-check">
+            <input type="checkbox" id="stealth-mode" class="form-check-input" />
+            <label class="form-check-label" for="stealth-mode">Stealth mode (minimal visual indicators)</label>
+          </div>
           <div class="d-grid gap-2">
             <button id="save-btn" class="btn btn-primary btn-sm">Save</button>
+            <button id="test-btn" class="btn btn-outline-secondary btn-sm">Test Connection</button>
           </div>
         </div>
 
         <div id="setup-view" class="text-center py-3">
           <i class="fas fa-key fa-2x mb-2 text-muted"></i>
-          <p class="mb-2">Enter your API key to get started.</p>
+          <p class="mb-2">Configure your AI provider to get started.</p>
           <button id="setup-btn" class="btn btn-primary btn-sm">Configure</button>
         </div>
       </div>
